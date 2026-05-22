@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace 'com.piotr.animegf'
+    namespace 'com.daedalus.animegf'
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.piotr.animegf"
+        applicationId "com.daedalus.animegf"
         minSdk 21
         targetSdk 34
         versionCode 1

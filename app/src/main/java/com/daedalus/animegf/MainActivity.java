@@ -1,4 +1,4 @@
-package com.piotr.animegf;
+package com.daedalus.animegf;
 
 import android.Manifest;
 import android.app.Activity;
@@ -124,10 +124,21 @@ public class MainActivity extends AppCompatActivity {
         setupWebView();
         requestStoragePermissionIfNeeded();
 
-        if (isOnline()) {
-            webView.loadUrl(TARGET_URL);
+        Intent intent = getIntent();
+        if (Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
+            // Opened via a deep link — load that URL directly
+            if (isOnline()) {
+                webView.loadUrl(intent.getData().toString());
+            } else {
+                showOfflineBanner(true);
+            }
         } else {
-            showOfflineBanner(true);
+            // Normal launch — load the homepage
+            if (isOnline()) {
+                webView.loadUrl(TARGET_URL);
+            } else {
+                showOfflineBanner(true);
+            }
         }
     }
 
@@ -199,18 +210,20 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
-
-                // ── Google OAuth → overlay WebView ────────────────────────────
-                // We do NOT open Custom Tabs any more. Custom Tabs has its own
-                // cookie jar — cookies set there are invisible to this WebView.
-                // An overlay WebView in the same app shares the same CookieManager,
-                // so after the user signs in the main WebView is already authenticated.
+ 
                 if (isGoogleAuthUrl(url)) {
                     openOAuthOverlay(url);
                     return true;
                 }
 
-                if (url.startsWith("http://") || url.startsWith("https://")) return false;
+                if (isDiscordAuthUrl(url)) {
+                    openOAuthOverlay(url);
+                    return true;
+                }
+
+                if (isAllowedInApp(url)) {
+                    return false; 
+                }
 
                 try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
                 catch (Exception e) { Log.w(TAG, "Unhandled URL: " + url); }
@@ -255,7 +268,10 @@ public class MainActivity extends AppCompatActivity {
                     fileChooserCallback = null;
                 }
                 fileChooserCallback = filePathCallback;
-                Intent intent = params.createIntent();
+                // Create a fresh intent ignoring website's file type restrictions
+                Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                intent.setType("*/*");
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
                 intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
                 try {
                     fileChooserLauncher.launch(intent);
@@ -332,7 +348,7 @@ public class MainActivity extends AppCompatActivity {
                 String redirectUrl = request.getUrl().toString();
 
                 // Still a Google-owned URL — stay in the overlay
-                if (isGoogleAuthUrl(redirectUrl)) return false;
+                if (isGoogleAuthUrl(redirectUrl) || isDiscordAuthUrl(redirectUrl)) return false;
 
                 // The OAuth flow has completed and Google is redirecting back
                 // to the app's domain (anime.gf or its auth callback).
@@ -397,10 +413,27 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private boolean isGoogleAuthUrl(String url) {
-        return url.contains("accounts.google.com")
-            || url.contains("google.com/o/oauth2")
-            || url.contains("oauth2.googleapis.com")
-            || url.contains("google.com/accounts");
+    return url.contains("accounts.google.com")
+        || url.contains("google.com/o/oauth2")
+        || url.contains("oauth2.googleapis.com")
+        || url.contains("google.com/accounts")
+        || (url.contains("supabase.co") && url.contains("provider=google"));
+    }
+
+    private boolean isDiscordAuthUrl(String url) {
+    return url.contains("discord.com/oauth2")
+        || url.contains("discord.com/api/oauth2")
+        || (url.contains("supabase.co") && url.contains("provider=discord"));
+    }
+
+    private boolean isAllowedInApp(String url) {
+    return url.contains("anime.gf")
+        || url.contains("supabase.co")          // handles ALL auth redirects
+        || url.contains("accounts.google.com")
+        || url.contains("google.com/o/oauth2")
+        || url.contains("oauth2.googleapis.com")
+        || url.contains("discord.com/oauth2")
+        || url.contains("discord.com/api/oauth2");
     }
 
     private boolean isOnline() {

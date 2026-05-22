@@ -1,0 +1,34 @@
+# Gradle files
+.gradle/
+
+# Local properties
+local.properties
+
+# IDE
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Android Studio
+*.ap_
+*.dex
+*.class
+bin/
+gen/
+out/
+
+# gradle wrapper
+gradle/wrapper/gradle-wrapper.jar
+
+# Build directory (but keep release APKs)
+build/
+!build/outputs/
+!build/outputs/apk/
+!build/outputs/apk/release/
+!build/outputs/apk/release/*.apk

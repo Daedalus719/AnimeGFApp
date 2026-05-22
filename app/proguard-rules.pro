@@ -1,5 +1,5 @@
 # Keep JS bridge methods
--keepclassmembers class com.piotr.animegf.MainActivity$BlobDownloadInterface {
+-keepclassmembers class com.daedalus.animegf.MainActivity$BlobDownloadInterface {
     public *;
 }
 -keepclassmembers class * {
