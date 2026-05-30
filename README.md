@@ -6,6 +6,10 @@ A lightweight Android WebView application that provides native app access to htt
 
 This is a simple WebView wrapper that displays the anime.gf website as a native Android application. 
 
+## Changes
+> v1.0 Initial release
+> v1.1 -  Added floating refresh button (double tap to refresh)
+
 
 ## Legal Notice
 
