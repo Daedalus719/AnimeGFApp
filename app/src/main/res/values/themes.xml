@@ -12,4 +12,20 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowBackground">@color/black</item>
     </style>
+    <style name="DarkBottomSheetStyle" parent="Theme.MaterialComponents.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/DarkBottomSheet</item>
+    </style>
+
+    <style name="DarkBottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
+        <item name="backgroundTint">#1A1A2E</item>
+        <item name="shapeAppearanceOverlay">@style/RoundedBottomSheet</item>
+    </style>
+
+    <style name="RoundedBottomSheet">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSizeTopLeft">16dp</item>
+        <item name="cornerSizeTopRight">16dp</item>
+        <item name="cornerSizeBottomLeft">0dp</item>
+        <item name="cornerSizeBottomRight">0dp</item>
+    </style>
 </resources>

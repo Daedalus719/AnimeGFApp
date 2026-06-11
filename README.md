@@ -11,6 +11,8 @@ This is a simple WebView wrapper that displays the anime.gf website as a native 
 
 > v1.1 -  Added floating refresh button (double tap to refresh)
 
+> v1.2 - Added Context Menu that opens when holding on image (save image, copy image url and search image with google lens) and on any url (open in browser, copy url)
+
 
 ## Legal Notice
 

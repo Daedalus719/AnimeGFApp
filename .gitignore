@@ -5,7 +5,9 @@
 local.properties
 
 # IDE
+.idea
 .idea/
+.vscode/
 *.iml
 *.swp
 *.swo
