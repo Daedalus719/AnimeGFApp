@@ -49,6 +49,7 @@ public final class SplashView extends View {
 
     private float cx, cy, iconR, ringR, strokePx, textY;
     private Bitmap iconBitmap;
+    private String statusText = "Configuring environment...";
 
     private float shown;          // what the ring currently displays (0..1)
     private float target;         // real progress reported by the WebView (0..1)
@@ -87,8 +88,7 @@ public final class SplashView extends View {
 
         textPaint.setColor(0xE6FFFFFF);
         textPaint.setTextAlign(Paint.Align.CENTER);
-        textPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        textPaint.setLetterSpacing(0.08f);
+        textPaint.setTypeface(Typeface.create("monospace", Typeface.NORMAL));
     }
 
     // ─── PUBLIC API ───────────────────────────────────────────────────────────
@@ -97,6 +97,12 @@ public final class SplashView extends View {
     public void setProgress(float progress) {
         float p = Math.max(0f, Math.min(1f, progress)) * 0.97f; // last 3% belongs to finish()
         if (p > target) target = p;
+    }
+
+    public void setStep(String text) {
+        if (text == null || text.isEmpty() || text.equals(statusText)) return;
+        statusText = text;
+        invalidate();
     }
 
     /** Page is ready: complete the ring, then fade out and invoke {@code callback}. */
@@ -134,7 +140,7 @@ public final class SplashView extends View {
         trackPaint.setStrokeWidth(strokePx);
         arcPaint.setStrokeWidth(strokePx);
         rimPaint.setStrokeWidth(1.5f * d);
-        textPaint.setTextSize(22f * d);
+        textPaint.setTextSize(13f * d);
         arcRect.set(cx - ringR, cy - ringR, cx + ringR, cy + ringR);
 
         // ring gradient: blue → green → blue, so a completed ring has no visible seam
@@ -218,7 +224,7 @@ public final class SplashView extends View {
             }
         }
 
-        canvas.drawText("anime.gf", cx, textY, textPaint);
+        canvas.drawText(statusText, cx, textY, textPaint);
         canvas.restoreToCount(layer);
 
         if (!done) postInvalidateOnAnimation();

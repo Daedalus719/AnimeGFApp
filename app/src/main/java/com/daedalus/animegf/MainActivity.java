@@ -289,6 +289,7 @@ public class MainActivity extends AppCompatActivity {
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 progressBar.setVisibility(View.VISIBLE);
                 showOfflineBanner(false);
+                if (splashView != null) splashView.setStep("Fetching configuration...");
                 injectDesktopScriptFallback(view, url);
             }
 
@@ -322,6 +323,11 @@ public class MainActivity extends AppCompatActivity {
                 progressBar.setProgress(newProgress);
                 progressBar.setVisibility(newProgress < 100 ? View.VISIBLE : View.GONE);
                 if (splashView != null) splashView.setProgress(newProgress / 100f);
+                if (splashView != null) {
+                    splashView.setStep(newProgress < 35
+                        ? "Loading services..."
+                        : newProgress < 85 ? "Initializing modules..." : "Finishing setup...");
+                }
             }
 
             @Override
