@@ -30,7 +30,16 @@ gradle/wrapper/gradle-wrapper.jar
 
 # Build directory (but keep release APKs)
 build/
-!build/outputs/
-!build/outputs/apk/
-!build/outputs/apk/release/
-!build/outputs/apk/release/*.apk
+release/
+!app/build/
+app/build/*
+!app/build/outputs/
+app/build/outputs/*
+!app/build/outputs/apk/
+app/build/outputs/apk/*
+!app/build/outputs/apk/release/
+app/build/outputs/apk/release/*
+!app/build/outputs/apk/release/*.apk
+!app/release/
+app/release/*
+!app/release/*.apk

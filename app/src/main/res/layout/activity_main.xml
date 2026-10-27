@@ -45,6 +45,13 @@
 
     </LinearLayout>
 
-    <!-- Floating refresh button is added programmatically in MainActivity -->
+    <!-- Floating menu views are added programmatically (FloatingMenu), just below the splash -->
+
+    <!-- Launch splash. High elevation so it also covers the (elevated) floating menu. -->
+    <com.daedalus.animegf.SplashView
+        android:id="@+id/splashView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:elevation="48dp" />
 
 </FrameLayout>

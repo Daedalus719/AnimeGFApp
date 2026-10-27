@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.AnimeGF" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Base.Theme.AnimeGF" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorPrimaryVariant">@color/colorPrimaryDark</item>
         <item name="colorOnPrimary">@color/white</item>
@@ -10,7 +10,25 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowNoTitle">true</item>
-        <item name="android:windowBackground">@color/black</item>
+        <!-- Same navy as the in-app splash, so the hand-over is seamless -->
+        <item name="android:windowBackground">@color/splash_bg</item>
+    </style>
+
+    <style name="Theme.AnimeGF" parent="Base.Theme.AnimeGF" />
+
+    <!-- Full-screen translucent window used by the glass modals (snippets, desktop mode) -->
+    <style name="GlassDialog" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="colorPrimary">@color/glass_blue</item>
+        <item name="colorAccent">@color/glass_blue</item>
+        <item name="colorControlActivated">@color/glass_blue</item>
+        <item name="android:textColorHighlight">#554C9AFF</item>
     </style>
     <style name="DarkBottomSheetStyle" parent="Theme.MaterialComponents.BottomSheetDialog">
         <item name="bottomSheetStyle">@style/DarkBottomSheet</item>

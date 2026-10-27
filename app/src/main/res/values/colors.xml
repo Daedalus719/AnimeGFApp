@@ -5,4 +5,8 @@
     <color name="colorAccent">#A78BFA</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <!-- Splash + glass UI -->
+    <color name="splash_bg">#FF0B1220</color>
+    <color name="glass_blue">#FF4C9AFF</color>
+    <color name="glass_green">#FF34D399</color>
 </resources>

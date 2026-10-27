@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ always shows a system splash. Keep it a flat navy screen with an
+         empty icon; the real splash (icon + progress ring) is drawn by SplashView. -->
+    <style name="Theme.AnimeGF" parent="Base.Theme.AnimeGF">
+        <item name="android:windowSplashScreenBackground">@color/splash_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_empty</item>
+    </style>
+</resources>

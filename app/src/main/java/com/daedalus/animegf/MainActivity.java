@@ -6,7 +6,6 @@ import android.app.Dialog;
 import android.app.DownloadManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -20,14 +19,11 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.SystemClock;
 import android.util.Base64;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
-import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
@@ -41,7 +37,6 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -61,13 +56,19 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
+import androidx.webkit.ScriptHandler;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -95,34 +96,22 @@ public class MainActivity extends AppCompatActivity {
     private ValueCallback<Uri[]>           fileChooserCallback;
     private ActivityResultLauncher<Intent> fileChooserLauncher;
 
-    // ─── FLOATING REFRESH BUTTON ──────────────────────────────────────────────
-    private Button   refreshFab;
-    private int      fabSizePx;
-    private int      dragThresholdPx;
+    // ─── FLOATING MENU / SPLASH / SNIPPETS / DESKTOP MODE ─────────────────────
+    private FloatingMenu floatingMenu;
+    private SplashView   splashView;
+    private SnippetStore snippetStore;
+    private DesktopMode  desktopMode;
 
-    // Drag tracking
-    private float   touchDownRawX, touchDownRawY;
-    private float   fabDownX, fabDownY;
-    private boolean isDragging = false;
+    private static final long SPLASH_TIMEOUT_MS = 15000L;
+    private final Handler splashHandler = new Handler(Looper.getMainLooper());
 
-    // Double-tap state
-    private boolean waitingForSecondTap = false;
-    private long    firstTapTime        = 0L;
-    private static final long DOUBLE_TAP_MAX_GAP = 1000L; // ms
-
-    // Reset timer for "primed" visual after first tap
-    private final Handler  fabResetHandler  = new Handler(Looper.getMainLooper());
-    private       Runnable fabResetRunnable = null;
-
-    // Shared preferences keys
-    private static final String PREFS_NAME = "animegf_prefs";
-    private static final String PREF_FAB_X = "fab_x_v2";
-    private static final String PREF_FAB_Y = "fab_y_v2";
-
-    // Button colors
-    private static final int COLOR_FAB_NORMAL  = 0xCC4A4A8A; // muted indigo, semi-transparent
-    private static final int COLOR_FAB_PRIMED  = 0xEEE64A19; // vivid orange-red
-    private static final int COLOR_FAB_TEXT    = 0xFFFFFFFF;
+    // User agent the WebView would use for the normal mobile site.
+    private String mobileUserAgent;
+    // Desktop-mode script + how it is delivered (document-start when supported).
+    private String        desktopScript;
+    private ScriptHandler desktopScriptHandler;
+    private static final Set<String> DESKTOP_SCRIPT_ORIGINS = new HashSet<>(
+        Arrays.asList("https://anime.gf", "https://www.anime.gf", "https://*.anime.gf"));
     // ──────────────────────────────────────────────────────────────────────────
 
     // ─── LIFECYCLE ────────────────────────────────────────────────────────────
@@ -147,6 +136,9 @@ public class MainActivity extends AppCompatActivity {
         progressBar   = findViewById(R.id.progressBar);
         offlineBanner = findViewById(R.id.offlineBanner);
         webView       = findViewById(R.id.webView);
+        splashView    = findViewById(R.id.splashView);
+        snippetStore  = new SnippetStore(this);
+        desktopMode   = DesktopMode.load(this);
 
         // Apply window insets to the *inner* content layout so the FAB
         // (which is also in rootLayout) can float freely edge-to-edge.
@@ -159,13 +151,18 @@ public class MainActivity extends AppCompatActivity {
 
             int bottomPadding = Math.max(bars.bottom, ime.bottom);
             contentLayout.setPadding(bars.left, bars.top, bars.right, bottomPadding);
+            if (floatingMenu != null) {
+                floatingMenu.setSafeInsets(bars.left, bars.top, bars.right, bars.bottom);
+            }
             return WindowInsetsCompat.CONSUMED;
         });
 
         setupFileChooserLauncher();
         setupWebView();
-        setupRefreshFab();
+        setupFloatingMenu();
+        applyDesktopMode(false);   // before the first load so the site sees the right identity
         requestStoragePermissionIfNeeded();
+        splashHandler.postDelayed(this::dismissSplash, SPLASH_TIMEOUT_MS);
 
         Intent intent = getIntent();
         if (Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null) {
@@ -173,12 +170,14 @@ public class MainActivity extends AppCompatActivity {
                 webView.loadUrl(intent.getData().toString());
             } else {
                 showOfflineBanner(true);
+                dismissSplash();
             }
         } else {
             if (isOnline()) {
                 webView.loadUrl(TARGET_URL);
             } else {
                 showOfflineBanner(true);
+                dismissSplash();
             }
         }
     }
@@ -189,18 +188,25 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         super.onStop();
-        saveFabPosition();
+        if (floatingMenu != null) floatingMenu.savePosition();
     }
 
     @Override
     protected void onDestroy() {
-        fabResetHandler.removeCallbacksAndMessages(null);
+        splashHandler.removeCallbacksAndMessages(null);
+        if (desktopScriptHandler != null) {
+            try { desktopScriptHandler.remove(); } catch (Exception ignored) { }
+        }
         if (webView != null) { webView.stopLoading(); webView.destroy(); }
         super.onDestroy();
     }
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK && floatingMenu != null && floatingMenu.isOpen()) {
+            floatingMenu.collapse(true);
+            return true;
+        }
         if (keyCode == KeyEvent.KEYCODE_BACK && webView.canGoBack()) {
             webView.goBack();
             return true;
@@ -253,6 +259,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupWebView() {
         applyWebViewSettings(webView, false /* keep site UA */);
+        mobileUserAgent = webView.getSettings().getUserAgentString();
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -282,12 +289,20 @@ public class MainActivity extends AppCompatActivity {
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 progressBar.setVisibility(View.VISIBLE);
                 showOfflineBanner(false);
+                injectDesktopScriptFallback(view, url);
+            }
+
+            @Override
+            public void onPageCommitVisible(WebView view, String url) {
+                injectDesktopScriptFallback(view, url);
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
                 progressBar.setVisibility(View.GONE);
                 injectBlobDownloadBridge(view);
+                injectDesktopScriptFallback(view, url);
+                dismissSplash();
             }
 
             @Override
@@ -296,6 +311,7 @@ public class MainActivity extends AppCompatActivity {
                 if (req.isForMainFrame()) {
                     progressBar.setVisibility(View.GONE);
                     showOfflineBanner(!isOnline());
+                    dismissSplash();
                 }
             }
         });
@@ -305,6 +321,7 @@ public class MainActivity extends AppCompatActivity {
             public void onProgressChanged(WebView view, int newProgress) {
                 progressBar.setProgress(newProgress);
                 progressBar.setVisibility(newProgress < 100 ? View.VISIBLE : View.GONE);
+                if (splashView != null) splashView.setProgress(newProgress / 100f);
             }
 
             @Override
@@ -721,195 +738,115 @@ public class MainActivity extends AppCompatActivity {
         }
 
 
-    // ─── FLOATING REFRESH BUTTON ──────────────────────────────────────────────
+    // ─── SPLASH ───────────────────────────────────────────────────────────────
 
-    /**
-     * Creates a small floating circular button that the user can drag anywhere
-     * on screen. Requires a double-tap (within 1 second) to actually refresh
-     * to avoid accidental reloads while repositioning.
-     *
-     *  • Single tap  → button turns orange with a slight scale-up ("primed")
-     *  • Second tap within 1 s → refreshes the current URL, button resets
-     *  • Timeout (1 s after first tap) → button resets to normal automatically
-     *  • Position is persisted in SharedPreferences across app restarts.
-     */
-    private void setupRefreshFab() {
-        float density = getResources().getDisplayMetrics().density;
-        fabSizePx       = Math.round(52 * density);
-        dragThresholdPx = Math.round(8  * density);
-
-        refreshFab = new Button(this);
-        refreshFab.setText("↻");
-        refreshFab.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
-        refreshFab.setTextColor(COLOR_FAB_TEXT);
-        refreshFab.setIncludeFontPadding(false);
-        refreshFab.setGravity(Gravity.CENTER);
-        refreshFab.setPadding(0, 0, 0, 0);
-        refreshFab.setAllCaps(false);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            refreshFab.setElevation(6 * density);
-        }
-
-        applyFabBackground(false /* not primed */);
-
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(fabSizePx, fabSizePx);
-        rootLayout.addView(refreshFab, lp);
-
-        // Restore saved position once the layout has measured itself.
-        rootLayout.getViewTreeObserver().addOnGlobalLayoutListener(
-            new ViewTreeObserver.OnGlobalLayoutListener() {
-                @Override public void onGlobalLayout() {
-                    rootLayout.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-                    restoreFabPosition();
-                }
-            }
-        );
-
-        refreshFab.setOnTouchListener((v, event) -> {
-            switch (event.getActionMasked()) {
-
-                case MotionEvent.ACTION_DOWN:
-                    touchDownRawX = event.getRawX();
-                    touchDownRawY = event.getRawY();
-                    fabDownX      = refreshFab.getX();
-                    fabDownY      = refreshFab.getY();
-                    isDragging    = false;
-                    break;
-
-                case MotionEvent.ACTION_MOVE:
-                    float dxMove = event.getRawX() - touchDownRawX;
-                    float dyMove = event.getRawY() - touchDownRawY;
-                    if (!isDragging &&
-                        (Math.abs(dxMove) > dragThresholdPx ||
-                         Math.abs(dyMove) > dragThresholdPx)) {
-                        isDragging = true;
-                    }
-                    if (isDragging) {
-                        refreshFab.setX(clampFabX(fabDownX + dxMove));
-                        refreshFab.setY(clampFabY(fabDownY + dyMove));
-                    }
-                    break;
-
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    if (!isDragging) {
-                        handleFabTap();
-                    }
-                    break;
-            }
-            return true; // consume — don't let touches pass through to the WebView
+    /** Complete the splash ring, fade it out and remove it. Safe to call repeatedly. */
+    private void dismissSplash() {
+        final SplashView splash = splashView;
+        if (splash == null) return;
+        splash.finish(() -> {
+            rootLayout.removeView(splash);
+            if (splashView == splash) splashView = null;
         });
     }
 
-    /** Handle a confirmed tap (not a drag) on the refresh FAB. */
-    private void handleFabTap() {
-        long now = SystemClock.elapsedRealtime();
+    // ─── FLOATING MENU ────────────────────────────────────────────────────────
 
-        if (waitingForSecondTap && (now - firstTapTime) <= DOUBLE_TAP_MAX_GAP) {
-            // ── Second tap: perform the reload ────────────────────────────────
-            waitingForSecondTap = false;
-            if (fabResetRunnable != null) {
-                fabResetHandler.removeCallbacks(fabResetRunnable);
-                fabResetRunnable = null;
-            }
-            // Brief "flash" scale to give tactile feedback, then reset
-            refreshFab.animate().cancel();
-            refreshFab.animate()
-                .scaleX(1.25f).scaleY(1.25f)
-                .setDuration(80)
-                .withEndAction(() ->
-                    refreshFab.animate()
-                        .scaleX(1f).scaleY(1f)
-                        .setDuration(150)
-                        .start()
-                ).start();
-            applyFabBackground(false);
+    /**
+     * Round, draggable menu button that expands into Reload / Snippets / Desktop mode.
+     * Its views are inserted just below the splash so the splash covers them at launch.
+     */
+    private void setupFloatingMenu() {
+        int insertIndex = splashView != null
+            ? rootLayout.indexOfChild(splashView)
+            : rootLayout.getChildCount();
+        floatingMenu = new FloatingMenu(this, rootLayout, insertIndex, new FloatingMenu.Listener() {
+            @Override public void onReload()   { reloadPage(); }
+            @Override public void onSnippets() { new SnippetsDialog(MainActivity.this, snippetStore).show(); }
+            @Override public void onDesktop()  { showDesktopDialog(); }
+        });
+    }
 
-            // Reload the currently displayed URL (not the hard-coded home URL)
-            String currentUrl = webView.getUrl();
-            if (currentUrl != null && !currentUrl.isEmpty()) {
-                webView.loadUrl(currentUrl);
-            } else {
-                webView.reload();
-            }
-
+    /** Reload whatever page is showing (or the home page if nothing loaded yet). */
+    private void reloadPage() {
+        String currentUrl = webView.getUrl();
+        if (currentUrl != null && !currentUrl.isEmpty() && !currentUrl.startsWith("about:")) {
+            webView.loadUrl(currentUrl);
+        } else if (isOnline()) {
+            showOfflineBanner(false);
+            webView.loadUrl(TARGET_URL);
         } else {
-            // ── First tap: prime the button ───────────────────────────────────
-            firstTapTime        = now;
-            waitingForSecondTap = true;
-            applyFabBackground(true);
-            refreshFab.animate().cancel();
-            refreshFab.animate()
-                .scaleX(1.18f).scaleY(1.18f)
-                .setDuration(120)
-                .start();
-
-            // Auto-reset if user doesn't tap again within the window
-            if (fabResetRunnable != null) fabResetHandler.removeCallbacks(fabResetRunnable);
-            fabResetRunnable = () -> {
-                waitingForSecondTap = false;
-                applyFabBackground(false);
-                refreshFab.animate().cancel();
-                refreshFab.animate()
-                    .scaleX(1f).scaleY(1f)
-                    .setDuration(200)
-                    .start();
-            };
-            fabResetHandler.postDelayed(fabResetRunnable, DOUBLE_TAP_MAX_GAP);
+            showOfflineBanner(true);
+            Toast.makeText(this, "No internet connection", Toast.LENGTH_SHORT).show();
         }
     }
 
-    /** Draw the circular FAB background. Orange when primed, muted indigo otherwise. */
-    private void applyFabBackground(boolean primed) {
-        float density = getResources().getDisplayMetrics().density;
-        GradientDrawable bg = new GradientDrawable();
-        bg.setShape(GradientDrawable.OVAL);
-        if (primed) {
-            bg.setColor(COLOR_FAB_PRIMED);
-            bg.setStroke(Math.round(2 * density), 0xFFFF6D3A);
-        } else {
-            bg.setColor(COLOR_FAB_NORMAL);
-            bg.setStroke(0, Color.TRANSPARENT);
+    // ─── DESKTOP MODE ─────────────────────────────────────────────────────────
+
+    private void showDesktopDialog() {
+        new DesktopDialog(this, desktopMode, (mode, width) -> {
+            desktopMode.set(this, mode, width);
+            applyDesktopMode(true);
+        }).show();
+    }
+
+    /**
+     * Applies the saved desktop-mode setting to the WebView: user agent, zoom behaviour and
+     * the page script (registered to run before any site script when the WebView supports it).
+     * A reload is needed for the site to see the change.
+     */
+    private void applyDesktopMode(boolean reload) {
+        WebSettings s = webView.getSettings();
+        boolean active = desktopMode.isActive();
+
+        s.setUserAgentString(active
+            ? DesktopMode.desktopUserAgent(mobileUserAgent)
+            : mobileUserAgent);
+
+        // Free pinch-zoom only in the real wide-viewport mode.
+        s.setSupportZoom(true);
+        s.setBuiltInZoomControls(desktopMode.getMode() == DesktopMode.VIEWPORT);
+        s.setDisplayZoomControls(false);
+        s.setUseWideViewPort(true);
+        s.setLoadWithOverviewMode(true);
+
+        if (desktopScriptHandler != null) {
+            try { desktopScriptHandler.remove(); } catch (Exception ignored) { }
+            desktopScriptHandler = null;
         }
-        refreshFab.setBackground(bg);
-    }
+        desktopScript = null;
 
-    /** Clamp an X coordinate so the button stays fully on screen. */
-    private float clampFabX(float x) {
-        return Math.max(0, Math.min(x, rootLayout.getWidth() - fabSizePx));
-    }
-
-    /** Clamp a Y coordinate so the button stays fully on screen. */
-    private float clampFabY(float y) {
-        return Math.max(0, Math.min(y, rootLayout.getHeight() - fabSizePx));
-    }
-
-    /** Position the FAB from SharedPreferences, defaulting to bottom-right corner. */
-    private void restoreFabPosition() {
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        float savedX = prefs.getFloat(PREF_FAB_X, -1f);
-        float savedY = prefs.getFloat(PREF_FAB_Y, -1f);
-
-        if (savedX < 0 || savedY < 0) {
-            // Default: bottom-right with a small margin
-            float margin = 20 * getResources().getDisplayMetrics().density;
-            savedX = rootLayout.getWidth()  - fabSizePx - margin;
-            savedY = rootLayout.getHeight() - fabSizePx - margin;
+        if (active) {
+            try {
+                desktopScript = desktopMode.buildScript(this, mobileUserAgent);
+            } catch (IOException e) {
+                Log.e(TAG, "Desktop mode script unavailable", e);
+                Toast.makeText(this, "Desktop mode failed: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+            }
+            if (desktopScript != null
+                && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                try {
+                    desktopScriptHandler = WebViewCompat.addDocumentStartJavaScript(
+                        webView, desktopScript, DESKTOP_SCRIPT_ORIGINS);
+                } catch (Exception e) {
+                    Log.w(TAG, "Document-start script rejected, using fallback", e);
+                }
+            }
         }
 
-        refreshFab.setX(clampFabX(savedX));
-        refreshFab.setY(clampFabY(savedY));
+        if (floatingMenu != null) floatingMenu.setDesktopState(active, desktopMode.label());
+        if (reload) reloadPage();
     }
 
-    /** Persist the current FAB position so it survives app restarts. */
-    private void saveFabPosition() {
-        if (refreshFab == null) return;
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putFloat(PREF_FAB_X, refreshFab.getX())
-            .putFloat(PREF_FAB_Y, refreshFab.getY())
-            .apply();
+    /**
+     * Fallback for WebViews without document-start scripts: inject as early as the
+     * WebViewClient callbacks allow. The script is idempotent, so repeated calls are fine.
+     */
+    private void injectDesktopScriptFallback(WebView view, String url) {
+        if (desktopScript == null || desktopScriptHandler != null || url == null) return;
+        if (!url.contains("anime.gf")) return;
+        view.evaluateJavascript(desktopScript, null);
     }
 
     // ─── OAUTH OVERLAY ────────────────────────────────────────────────────────
