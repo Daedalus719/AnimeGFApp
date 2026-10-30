@@ -36,7 +36,7 @@
             android:paddingBottom="6dp"
             android:visibility="gone" />
 
-        <WebView
+        <com.daedalus.animegf.SelectionWebView
             android:id="@+id/webView"
             android:layout_width="match_parent"
             android:layout_height="match_parent"

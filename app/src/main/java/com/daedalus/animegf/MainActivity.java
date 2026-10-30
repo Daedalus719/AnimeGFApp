@@ -9,7 +9,6 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
-import android.graphics.drawable.GradientDrawable;
 import android.media.MediaScannerConnection;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
@@ -21,7 +20,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Base64;
 import android.util.Log;
-import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.Window;
@@ -43,8 +41,6 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.google.android.material.bottomsheet.BottomSheetDialog;
-import android.util.TypedValue;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
@@ -88,7 +84,7 @@ public class MainActivity extends AppCompatActivity {
     // ─── VIEWS ────────────────────────────────────────────────────────────────
     private FrameLayout  rootLayout;     // full-screen host (changed from LinearLayout)
     private LinearLayout contentLayout;  // inner stack for progress/banner/webview
-    private WebView      webView;
+    private SelectionWebView webView;
     private ProgressBar  progressBar;
     private TextView     offlineBanner;
 
@@ -101,6 +97,7 @@ public class MainActivity extends AppCompatActivity {
     private SplashView   splashView;
     private SnippetStore snippetStore;
     private DesktopMode  desktopMode;
+    private PageInteraction pageInteraction;
 
     private static final long SPLASH_TIMEOUT_MS = 15000L;
     private final Handler splashHandler = new Handler(Looper.getMainLooper());
@@ -110,7 +107,7 @@ public class MainActivity extends AppCompatActivity {
     // Desktop-mode script + how it is delivered (document-start when supported).
     private String        desktopScript;
     private ScriptHandler desktopScriptHandler;
-    private static final Set<String> DESKTOP_SCRIPT_ORIGINS = new HashSet<>(
+    private static final Set<String> SITE_SCRIPT_ORIGINS = new HashSet<>(
         Arrays.asList("https://anime.gf", "https://www.anime.gf", "https://*.anime.gf"));
     // ──────────────────────────────────────────────────────────────────────────
 
@@ -160,6 +157,7 @@ public class MainActivity extends AppCompatActivity {
         setupFileChooserLauncher();
         setupWebView();
         setupFloatingMenu();
+        setupPageInteraction();
         applyDesktopMode(false);   // before the first load so the site sees the right identity
         requestStoragePermissionIfNeeded();
         splashHandler.postDelayed(this::dismissSplash, SPLASH_TIMEOUT_MS);
@@ -183,7 +181,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override protected void onResume() { super.onResume(); webView.onResume(); }
-    @Override protected void onPause()  { super.onPause();  webView.onPause();  }
+    @Override
+    protected void onPause() {
+        super.onPause();
+        webView.onPause();
+        pageInteraction.hideToolbar();
+    }
 
     @Override
     protected void onStop() {
@@ -194,6 +197,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         splashHandler.removeCallbacksAndMessages(null);
+        if (pageInteraction != null) pageInteraction.destroy();
         if (desktopScriptHandler != null) {
             try { desktopScriptHandler.remove(); } catch (Exception ignored) { }
         }
@@ -205,6 +209,9 @@ public class MainActivity extends AppCompatActivity {
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK && floatingMenu != null && floatingMenu.isOpen()) {
             floatingMenu.collapse(true);
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_BACK && pageInteraction.dismissSelection()) {
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_BACK && webView.canGoBack()) {
@@ -290,11 +297,13 @@ public class MainActivity extends AppCompatActivity {
                 progressBar.setVisibility(View.VISIBLE);
                 showOfflineBanner(false);
                 if (splashView != null) splashView.setStep("Fetching configuration...");
+                pageInteraction.onPageStarted(view, url);
                 injectDesktopScriptFallback(view, url);
             }
 
             @Override
             public void onPageCommitVisible(WebView view, String url) {
+                pageInteraction.injectFallback(view, url);
                 injectDesktopScriptFallback(view, url);
             }
 
@@ -302,6 +311,7 @@ public class MainActivity extends AppCompatActivity {
             public void onPageFinished(WebView view, String url) {
                 progressBar.setVisibility(View.GONE);
                 injectBlobDownloadBridge(view);
+                pageInteraction.injectFallback(view, url);
                 injectDesktopScriptFallback(view, url);
                 dismissSplash();
             }
@@ -382,367 +392,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         webView.addJavascriptInterface(new BlobDownloadInterface(), "AndroidBridge");
-        setupWebViewContextMenu();
     }
-
-        // Context Menu on images 
-        private void setupWebViewContextMenu() {
-            webView.setOnLongClickListener(v -> {
-                WebView.HitTestResult hit = webView.getHitTestResult();
-                if (hit == null) return false;
-
-                int type = hit.getType();
-                String extra = hit.getExtra(); // URL or src of what was hit
-
-                if (type == WebView.HitTestResult.IMAGE_TYPE ||
-                    type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE) {
-
-                    showImageContextMenu(extra);
-                    return true;
-                } else if (type == WebView.HitTestResult.SRC_ANCHOR_TYPE) {
-                    showLinkContextMenu(extra);
-                    return true;
-                }
-
-                return false;
-            });
-        }
-            private void showImageContextMenu(String url) {
-                BottomSheetDialog sheet = new BottomSheetDialog(this, R.style.DarkBottomSheetStyle);
-
-                LinearLayout root = new LinearLayout(this);
-                root.setOrientation(LinearLayout.VERTICAL);
-                root.setBackgroundColor(0xFF1C1C1E);
-
-                // ── Drag handle ──────────────────────────────────────────────────────
-                LinearLayout handleWrapper = new LinearLayout(this);
-                handleWrapper.setGravity(Gravity.CENTER_HORIZONTAL);
-                handleWrapper.setPadding(0, dpToPx(10), 0, 0);
-                View handle = new View(this);
-                GradientDrawable handleBg = new GradientDrawable();
-                handleBg.setColor(0xFF48484A);
-                handleBg.setCornerRadius(dpToPx(3));
-                handle.setBackground(handleBg);
-                handleWrapper.addView(handle, new LinearLayout.LayoutParams(dpToPx(32), dpToPx(4)));
-                root.addView(handleWrapper);
-
-                // ── Image preview card ───────────────────────────────────────────────
-                LinearLayout previewRow = new LinearLayout(this);
-                previewRow.setOrientation(LinearLayout.HORIZONTAL);
-                previewRow.setGravity(Gravity.CENTER_VERTICAL);
-                previewRow.setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(14));
-
-                // Thumbnail placeholder (grey rounded rect — loads async below)
-                android.widget.ImageView thumb = new android.widget.ImageView(this);
-                thumb.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
-                GradientDrawable thumbBg = new GradientDrawable();
-                thumbBg.setColor(0xFF2C2C2E);
-                thumbBg.setCornerRadius(dpToPx(6));
-                thumb.setBackground(thumbBg);
-                LinearLayout.LayoutParams thumbLp =
-                    new LinearLayout.LayoutParams(dpToPx(52), dpToPx(52));
-                thumbLp.rightMargin = dpToPx(12);
-                thumb.setLayoutParams(thumbLp);
-
-                String thumbUA = webView.getSettings().getUserAgentString();
-                String thumbCookie = CookieManager.getInstance().getCookie(url);
-                
-                // Load thumbnail async
-                new Thread(() -> {
-                    try {
-                        java.net.URL imgUrl = new java.net.URL(url);
-                        java.net.HttpURLConnection conn =
-                            (java.net.HttpURLConnection) imgUrl.openConnection();
-                        conn.setRequestProperty("User-Agent", thumbUA);
-                        conn.setRequestProperty("Cookie", thumbCookie);
-                        conn.setRequestProperty("Referer", "https://anime.gf/");
-                        conn.setConnectTimeout(3000);
-                        conn.setReadTimeout(5000);
-                        conn.connect();
-                        Bitmap bmp = android.graphics.BitmapFactory
-                            .decodeStream(conn.getInputStream());
-                        if (bmp != null) {
-                            runOnUiThread(() -> {
-                                thumb.setImageBitmap(bmp);
-                                thumb.setBackground(null);
-                            });
-                        }
-                    } catch (Exception ignored) {}
-                }).start();
-
-                // URL label
-                LinearLayout textCol = new LinearLayout(this);
-                textCol.setOrientation(LinearLayout.VERTICAL);
-                textCol.setLayoutParams(new LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-                TextView urlLabel = new TextView(this);
-                String host = "";
-                try { host = new java.net.URL(url).getHost(); } catch (Exception e) { host = url; }
-                urlLabel.setText(host);
-                urlLabel.setTextColor(0xFFFFFFFF);
-                urlLabel.setTextSize(14);
-                urlLabel.setMaxLines(1);
-                urlLabel.setEllipsize(android.text.TextUtils.TruncateAt.END);
-
-                TextView urlSub = new TextView(this);
-                urlSub.setText(url);
-                urlSub.setTextColor(0xFF8E8E93);
-                urlSub.setTextSize(11);
-                urlSub.setMaxLines(1);
-                urlSub.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-
-                textCol.addView(urlLabel);
-                textCol.addView(urlSub);
-
-                previewRow.addView(thumb);
-                previewRow.addView(textCol);
-                root.addView(previewRow);
-
-                // ── Separator ────────────────────────────────────────────────────────
-                View sep = new View(this);
-                sep.setBackgroundColor(0xFF38383A);
-                root.addView(sep, new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, 1));
-
-                // ── Menu items ───────────────────────────────────────────────────────
-                // Using Unicode symbols that render cleanly as icon-like glyphs
-                Object[][] items = {
-                    {0x21E9, "Save image",             (Runnable) () -> downloadImage(url)},
-                    {0x1F517, "Copy image URL",        (Runnable) () -> copyToClipboard(url)},
-                    {0x1F50D, "Search with Google Lens",(Runnable) () -> openGoogleLens(url)},
-                };
-
-                // Better: use simple vector-drawn icons via canvas
-                int[][] iconColors = {
-                    {0xFF30D158}, // green  - save
-                    {0xFF0A84FF}, // blue   - copy
-                    {0xFFFF453A}, // red    - lens
-                };
-                String[] svgPaths = {"⬇", "🔗", "⌕"};
-                // Use text-based icons with a styled circle bg for a modern pill look
-                String[] iconSymbols = {"↓", "⎘", "⌕"};
-                int[] iconBgColors   = {0xFF1C3A2A, 0xFF1A2A3A, 0xFF2A1A1A};
-                int[] iconFgColors   = {0xFF30D158, 0xFF0A84FF, 0xFFFF6B6B};
-                String[] labels      = {"Save image", "Copy image URL", "Search with Google Lens"};
-                Runnable[] actions   = {
-                    () -> downloadImage(url),
-                    () -> copyToClipboard(url),
-                    () -> openGoogleLens(url)
-                };
-
-                for (int i = 0; i < labels.length; i++) {
-                    final Runnable action = actions[i];
-
-                    LinearLayout row = new LinearLayout(this);
-                    row.setOrientation(LinearLayout.HORIZONTAL);
-                    row.setGravity(Gravity.CENTER_VERTICAL);
-                    row.setPadding(dpToPx(16), dpToPx(13), dpToPx(16), dpToPx(13));
-                    TypedValue ripple = new TypedValue();
-                    getTheme().resolveAttribute(android.R.attr.selectableItemBackground, ripple, true);
-                    row.setBackgroundResource(ripple.resourceId);
-
-                    // Circular icon bg
-                    TextView iconView = new TextView(this);
-                    iconView.setText(iconSymbols[i]);
-                    iconView.setTextColor(iconFgColors[i]);
-                    iconView.setTextSize(16);
-                    iconView.setGravity(Gravity.CENTER);
-                    GradientDrawable iconBg = new GradientDrawable();
-                    iconBg.setShape(GradientDrawable.OVAL);
-                    iconBg.setColor(iconBgColors[i]);
-                    iconView.setBackground(iconBg);
-                    LinearLayout.LayoutParams iconLp =
-                        new LinearLayout.LayoutParams(dpToPx(36), dpToPx(36));
-                    iconLp.rightMargin = dpToPx(14);
-                    iconView.setLayoutParams(iconLp);
-
-                    TextView labelView = new TextView(this);
-                    labelView.setText(labels[i]);
-                    labelView.setTextColor(0xFFFFFFFF);
-                    labelView.setTextSize(15);
-
-                    row.addView(iconView);
-                    row.addView(labelView);
-                    row.setOnClickListener(v -> { sheet.dismiss(); action.run(); });
-                    root.addView(row);
-
-                    // thin separator between rows, not after last
-                    if (i < labels.length - 1) {
-                        View div = new View(this);
-                        div.setBackgroundColor(0xFF38383A);
-                        LinearLayout.LayoutParams divLp = new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT, 1);
-                        divLp.setMargins(dpToPx(66), 0, 0, 0); // indent to align with text, not icon
-                        div.setLayoutParams(divLp);
-                        root.addView(div);
-                    }
-                }
-
-                // bottom breathing room
-                root.addView(new View(this), new LinearLayout.LayoutParams(0, dpToPx(16)));
-
-                sheet.setContentView(root);
-                sheet.show();
-            }
-
-            private int dpToPx(int dp) {
-                return Math.round(dp * getResources().getDisplayMetrics().density);
-            }
-
-            private void showLinkContextMenu(String url) {
-                BottomSheetDialog sheet = new BottomSheetDialog(this, R.style.DarkBottomSheetStyle);
-
-                LinearLayout layout = new LinearLayout(this);
-                layout.setOrientation(LinearLayout.VERTICAL);
-                layout.setBackgroundColor(0xFF1A1A2E);
-                int sidePad = dpToPx(8);
-                layout.setPadding(sidePad, dpToPx(12), sidePad, dpToPx(24));
-
-                // Handle bar (same as image menu)
-                View handle = new View(this);
-                GradientDrawable handleBg = new GradientDrawable();
-                handleBg.setColor(0xFF444466);
-                handleBg.setCornerRadius(dpToPx(4));
-                handle.setBackground(handleBg);
-                LinearLayout.LayoutParams handleParams = new LinearLayout.LayoutParams(dpToPx(36), dpToPx(4));
-                handleParams.gravity = Gravity.CENTER_HORIZONTAL;
-                LinearLayout handleWrapper = new LinearLayout(this);
-                handleWrapper.setGravity(Gravity.CENTER_HORIZONTAL);
-                handleWrapper.setPadding(0, 0, 0, dpToPx(8));
-                handleWrapper.addView(handle, handleParams);
-                layout.addView(handleWrapper);
-
-                String[][] items = {
-                    {"🌐", "Open in browser"},
-                    {"🔗", "Copy link"}
-                };
-
-                for (int i = 0; i < items.length; i++) {
-                    final int index = i;
-                    LinearLayout row = new LinearLayout(this);
-                    row.setOrientation(LinearLayout.HORIZONTAL);
-                    row.setGravity(Gravity.CENTER_VERTICAL);
-                    row.setPadding(dpToPx(16), dpToPx(14), dpToPx(16), dpToPx(14));
-                    TypedValue ripple = new TypedValue();
-                    getTheme().resolveAttribute(android.R.attr.selectableItemBackground, ripple, true);
-                    row.setBackgroundResource(ripple.resourceId);
-
-                    TextView emoji = new TextView(this);
-                    emoji.setText(items[i][0]);
-                    emoji.setTextSize(20);
-                    emoji.setPadding(0, 0, dpToPx(16), 0);
-
-                    TextView label = new TextView(this);
-                    label.setText(items[i][1]);
-                    label.setTextColor(0xFFE0E0F0);
-                    label.setTextSize(15);
-
-                    row.addView(emoji);
-                    row.addView(label);
-                    row.setOnClickListener(v -> {
-                        sheet.dismiss();
-                        if (index == 0) startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
-                        else copyToClipboard(url);
-                    });
-                    layout.addView(row);
-
-                    if (i < items.length - 1) {
-                        View divider = new View(this);
-                        LinearLayout.LayoutParams dp = new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT, 1);
-                        dp.setMargins(dpToPx(16), 0, dpToPx(16), 0);
-                        divider.setLayoutParams(dp);
-                        divider.setBackgroundColor(0x22FFFFFF);
-                        layout.addView(divider);
-                    }
-                }
-
-                sheet.setContentView(layout);
-                sheet.show();
-            }
-
-        private void downloadImage(String url) {
-            if (url == null || url.isEmpty()) return;
-
-                // Grab these on the main thread BEFORE going background
-                String userAgent = webView.getSettings().getUserAgentString();
-                String cookie = CookieManager.getInstance().getCookie(url);
-
-            Toast.makeText(this, "Saving image…", Toast.LENGTH_SHORT).show();
-
-            new Thread(() -> {
-                try {
-                    java.net.URL imgUrl = new java.net.URL(url);
-                    java.net.HttpURLConnection conn =
-                        (java.net.HttpURLConnection) imgUrl.openConnection();
-                    conn.setRequestProperty("User-Agent", userAgent);
-                    conn.setRequestProperty("Cookie", cookie);
-                    conn.setRequestProperty("Referer", "https://anime.gf/");
-                    conn.setConnectTimeout(10000);
-                    conn.setReadTimeout(15000);
-                    conn.connect();
-
-                    int responseCode = conn.getResponseCode();
-                    if (responseCode != 200) {
-                        runOnUiThread(() -> Toast.makeText(this,
-                            "Download failed: HTTP " + responseCode,
-                            Toast.LENGTH_LONG).show());
-                        return;
-                    }
-
-                    // Guess extension from Content-Type if URL has none
-                    String contentType = conn.getContentType();
-                    String ext = MimeTypeMap.getSingleton()
-                        .getExtensionFromMimeType(contentType);
-                    if (ext == null) ext = "jpg";
-
-                    String fileName = "AnimeGF_" +
-                        new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
-                            .format(new Date()) + "." + ext;
-
-                    File dir = Environment
-                        .getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES);
-                    if (!dir.exists()) dir.mkdirs();
-                    File out = new File(dir, fileName);
-
-                    try (java.io.InputStream in = conn.getInputStream();
-                        FileOutputStream fos = new FileOutputStream(out)) {
-                        byte[] buf = new byte[8192];
-                        int n;
-                        while ((n = in.read(buf)) != -1) fos.write(buf, 0, n);
-                    }
-
-                    MediaScannerConnection.scanFile(this,
-                        new String[]{out.getAbsolutePath()},
-                        new String[]{contentType}, null);
-
-                    runOnUiThread(() -> Toast.makeText(this,
-                        "Saved to Pictures: " + fileName, Toast.LENGTH_LONG).show());
-
-                } catch (Exception e) {
-                    runOnUiThread(() -> Toast.makeText(this,
-                        "Save failed: " + e.getMessage(), Toast.LENGTH_LONG).show());
-                }
-            }).start();
-        }
-
-        private void copyToClipboard(String text) {
-            android.content.ClipboardManager cm =
-                (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            if (cm != null) {
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("URL", text));
-                Toast.makeText(this, "Copied!", Toast.LENGTH_SHORT).show();
-            }
-        }
-
-        private void openGoogleLens(String imageUrl) {
-            String lensUrl = "https://lens.google.com/uploadbyurl?url=" +
-                Uri.encode(imageUrl);
-            // Try to open in the main WebView so cookies are shared
-            webView.loadUrl(lensUrl);
-        }
-
 
     // ─── SPLASH ───────────────────────────────────────────────────────────────
 
@@ -771,6 +421,18 @@ public class MainActivity extends AppCompatActivity {
             @Override public void onSnippets() { new SnippetsDialog(MainActivity.this, snippetStore).show(); }
             @Override public void onDesktop()  { showDesktopDialog(); }
         });
+    }
+
+    /**
+     * Long-press menu for images / links and the app's own text-selection toolbar. Its toolbar
+     * view goes just below the splash, like the floating menu.
+     */
+    private void setupPageInteraction() {
+        int insertIndex = splashView != null
+            ? rootLayout.indexOfChild(splashView)
+            : rootLayout.getChildCount();
+        pageInteraction = new PageInteraction(this, webView, rootLayout, insertIndex, SITE_SCRIPT_ORIGINS);
+        pageInteraction.install();
     }
 
     /** Reload whatever page is showing (or the home page if nothing loaded yet). */
@@ -834,7 +496,7 @@ public class MainActivity extends AppCompatActivity {
                 && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 try {
                     desktopScriptHandler = WebViewCompat.addDocumentStartJavaScript(
-                        webView, desktopScript, DESKTOP_SCRIPT_ORIGINS);
+                        webView, desktopScript, SITE_SCRIPT_ORIGINS);
                 } catch (Exception e) {
                     Log.w(TAG, "Document-start script rejected, using fallback", e);
                 }
