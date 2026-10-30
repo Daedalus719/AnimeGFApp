@@ -278,11 +278,11 @@ final class PageInteraction implements SelectionToolbar.Listener {
                 webView.evaluateJavascript(JS_SELECT_ALL, null);
                 break;
             case SelectionToolbar.SEARCH:
-                evaluateText(JS_TEXT, text -> lookUp(text, query ->
+                evaluateText(JS_TEXT, text -> lookUp(text, "Search", R.drawable.ic_search, query ->
                     "https://www.google.com/search?q=" + Uri.encode(query)));
                 break;
             case SelectionToolbar.TRANSLATE:
-                evaluateText(JS_TEXT, text -> lookUp(text, query ->
+                evaluateText(JS_TEXT, text -> lookUp(text, "Translate", R.drawable.ic_translate, query ->
                     "https://translate.google.com/?sl=auto&tl=" + Uri.encode(deviceLanguage())
                         + "&text=" + Uri.encode(query) + "&op=translate"));
                 break;
@@ -307,11 +307,13 @@ final class PageInteraction implements SelectionToolbar.Listener {
         }
     }
 
-    private void lookUp(String text, Function<String, String> urlFor) {
+    /** Opens a web lookup of the selected text in the in-app browser modal. */
+    private void lookUp(String text, String title, int iconRes, Function<String, String> urlFor) {
         String query = text.replaceAll("\\s+", " ").trim();
         if (query.isEmpty()) return;
         if (query.length() > MAX_LOOKUP_CHARS) query = query.substring(0, MAX_LOOKUP_CHARS);
-        openExternal(urlFor.apply(query));
+        new WebModalDialog(activity, title, iconRes, urlFor.apply(query),
+            webView.getSettings().getUserAgentString()).show();
         webView.evaluateJavascript(JS_COLLAPSE, null);
     }
 
